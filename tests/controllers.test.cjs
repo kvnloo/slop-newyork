@@ -5,6 +5,7 @@ const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
 const source = readFileSync(join(__dirname, '../js/controllers.js'), 'utf8');
+const physics = loadModule(readFileSync(join(__dirname, '../js/collision-physics.js'), 'utf8'));
 
 function eventTarget() {
   const listeners = new Map();
@@ -36,6 +37,7 @@ function keyboardHarness(nyc = {}) {
       './actor-models.js': {},
       './pedestrians.js': {},
       './vehicle-lights.js': {},
+      './collision-physics.js': physics,
       './landmarks.js': {}
     }
   });
