@@ -73,6 +73,21 @@ for (const mode of ['cyclist', 'helicopter']) {
   });
 }
 
+test('descending helicopter lands on roof with vertical bounce and crash audio', () => {
+  const roof = { minX: -12, maxX: 12, minZ: -12, maxZ: 12, maxY: 25 };
+  const { controller, events } = control('helicopter', roof);
+  const position = { x: 0, y: 25.4, z: 0 };
+  const helicopter = { type: 'helicopter', heading: 0, speed: 0,
+    verticalSpeed: -10, rollAngle: 0, pitchAngle: 0 };
+  controller.resolveHorizontalCollision(position, 4.5, position.y, null, helicopter);
+  assert.ok(Math.abs(position.y - 25.7) < 1e-8);
+  assert.ok(helicopter.verticalSpeed > 0, 'vertical velocity rebounds');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, 'building');
+  assert.equal(events[0].ny, 1);
+  assert.ok(events[0].speed >= 10);
+});
+
 test('airborne helicopter above rooftop ignores the horizontal footprint', () => {
   const { controller, events } = control('helicopter',
     { minX: -5, maxX: 5, minZ: -5, maxZ: 5, maxY: 25 });
