@@ -868,6 +868,25 @@ class ThirdPersonControllerManager {
     let near = this.nearColliders(gx, gz, reach);
     for (let i = 0; i < near.length; i++) {
       const c = near[i];
+      if (heli && entity?.type === 'helicopter' && Number.isFinite(c.maxY)
+        && pos.y >= c.maxY && pos.y - 0.7 < c.maxY) {
+        // The rotor/body touches a rooftop from above: land on the roof
+        // instead of being shunted sideways by a horizontal wall test.
+        const roof = circleBuildingContact(pos.x, pos.z, radius, c);
+        if (roof) {
+          const closing = Math.max(0, -(entity.verticalSpeed || 0));
+          pos.y = c.maxY + 0.7;
+          entity.verticalSpeed = closing > 0.5 ? closing * 0.12 : 0;
+          if (closing > 0.5) {
+            this.reportCollision(entity, c, 'building', pos.x, c.maxY,
+              pos.z, 0, 1, 0, closing);
+            if (closing > 2.2) entity.lastCollisionSpark = {
+              x: pos.x, y: c.maxY, z: pos.z, nx: 0, nz: 0, speed: closing
+            };
+          }
+          continue;
+        }
+      }
       if (yHeight > c.maxY + 1.5) continue;
 
       if (
