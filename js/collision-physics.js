@@ -43,6 +43,41 @@ export function buildingContact(body, collider) {
   return footprintContact(body, building);
 }
 
+
+// A pedestrian, bicycle or helicopter is approximated by a horizontal
+// cylinder, not a square. Closest-point distance avoids phantom contacts at
+// diagonal building corners and matches the teleport clearance calculation.
+export function circleBuildingContact(x, z, radius, collider) {
+  const o = collider.obb;
+  const cs = o ? o.cs : 1, sn = o ? o.sn : 0;
+  const cx = o ? o.cx : (collider.minX + collider.maxX) * 0.5;
+  const cz = o ? o.cz : (collider.minZ + collider.maxZ) * 0.5;
+  const hx = o ? o.hx : (collider.maxX - collider.minX) * 0.5;
+  const hz = o ? o.hz : (collider.maxZ - collider.minZ) * 0.5;
+  const dx = x - cx, dz = z - cz;
+  const lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+  const px = Math.max(-hx, Math.min(hx, lx));
+  const pz = Math.max(-hz, Math.min(hz, lz));
+  let nx = lx - px, nz = lz - pz;
+  const distance = Math.hypot(nx, nz);
+  if (distance >= radius) return null;
+  let depth;
+  if (distance > 1e-8) {
+    nx /= distance;
+    nz /= distance;
+    depth = radius - distance;
+  } else {
+    // Center inside the facade: project out along the closest face.
+    const edgeX = hx - Math.abs(lx), edgeZ = hz - Math.abs(lz);
+    if (edgeX < edgeZ) {
+      nx = lx < 0 ? -1 : 1; nz = 0; depth = radius + edgeX;
+    } else {
+      nx = 0; nz = lz < 0 ? -1 : 1; depth = radius + edgeZ;
+    }
+  }
+  return { nx: nx * cs + nz * sn, nz: -nx * sn + nz * cs, depth };
+}
+
 // Friction-free normal impulse. The caller owns road constraints, friction,
 // suspension and presentation. Inverse mass zero means an immovable building.
 export function impactResponse(aVx, aVz, bVx, bVz, nx, nz, invMassA, invMassB, restitution = 0.18) {
