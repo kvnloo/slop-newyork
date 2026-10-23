@@ -20,6 +20,7 @@ import {
   createLoftedBusMaterial
 } from './actor-models.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
+import { footprintContact, buildingContact, impactResponse } from './collision-physics.js';
 
 // js/traffic.js
 // Manhattan traffic and pedestrians on the road graph road-network.js derives from the city as built:
@@ -78,18 +79,25 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
   const group = new THREE.Group();
   group.name = 'ManhattanTrafficAndPedestrians';
   let collisionListener = null;
+  let collisionQuery = null;
   const collisionEvent = { a: null, b: null, kind: 'vehicle', x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, speed: 0 };
 
   function setCollisionListener(listener) {
     collisionListener = typeof listener === 'function' ? listener : null;
   }
 
+  // Share the controller's spatial hash instead of rebuilding the city's building index.
+  function setCollisionQuery(query) {
+    collisionQuery = typeof query === 'function' ? query : null;
+  }
+
   // Synchronous notification: listeners must copy any fields they retain. Normal points from b toward a.
-  function reportCollision(a, b, x, y, z, nx, nz, speed) {
+  function reportCollision(a, b, x, y, z, nx, nz, speed, kind = 'vehicle') {
     if (!collisionListener || speed <= 0.5) return;
     collisionEvent.a = a; collisionEvent.b = b;
     collisionEvent.x = x; collisionEvent.y = y; collisionEvent.z = z;
     collisionEvent.nx = nx; collisionEvent.nz = nz; collisionEvent.speed = speed;
+    collisionEvent.kind = kind;
     collisionListener(collisionEvent);
   }
 
@@ -1197,6 +1205,44 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     }
   }
 
+
+  // Road traffic stays lane-constrained, but a side impact can shove it into a
+  // facade. Test only knocked vehicles against the shared nearby-collider hash.
+  function collideWithBuildings(v) {
+    if (!collisionQuery || v.vx * v.vx + v.vz * v.vz < 0.04) return;
+    const reach = v.half + 3;
+    const nearby = collisionQuery(v.x, v.z, reach);
+    for (const c of nearby) {
+      if (c.maxY < 0 || v.x < c.minX - reach || v.x > c.maxX + reach
+        || v.z < c.minZ - reach || v.z > c.maxZ + reach) continue;
+      const hit = buildingContact({
+        x: v.x, z: v.z, yaw: v.yaw + v.yawOffset,
+        halfWidth: v.halfWidth, halfLength: v.half
+      }, c);
+      if (!hit) continue;
+      const { nx, nz, depth } = hit;
+      shove(v, nx * (depth + 0.02), nz * (depth + 0.02));
+
+      const avx = v.tx * v.speed + v.vx, avz = v.tz * v.speed + v.vz;
+      const response = impactResponse(avx, avz, 0, 0, nx, nz, 1, 0, 0.12);
+      if (!response.approachSpeed) continue;
+      // Split the resulting velocity into road-progress and off-axis recoil.
+      // Lane speed cannot go negative; the recoil decays in knock().
+      v.speed = Math.min(v.speed, Math.max(0, response.aVx * v.tx + response.aVz * v.tz));
+      v.vx = response.aVx - v.tx * v.speed;
+      v.vz = response.aVz - v.tz * v.speed;
+      const side = nz * v.tx - nx * v.tz;
+      v.yawVel += side * Math.min(2.8, response.approachSpeed * 0.20);
+      v.rollVel += side * Math.min(8, response.approachSpeed) * 0.16;
+      reportCollision(v, c, v.x - nx * v.halfWidth, 0.65,
+        v.z - nz * v.halfWidth, nx, nz, response.approachSpeed, 'building');
+      if (response.approachSpeed > 2.2) {
+        spawnCollisionSparks(v.x - nx * v.halfWidth, 0.65,
+          v.z - nz * v.halfWidth, nx, nz, response.approachSpeed);
+      }
+    }
+  }
+
   // Physical 4-axis 2D SAT OBB test between a vehicle (half extents halfW x halfL, heading rotY) and the player.
   // Returns the minimum translation axis (pointing from the vehicle towards the player), or null if they don't overlap.
   const satHit = { nx: 0, nz: 0, pen: 0, localX: 0, localZ: 0, pSin: 0, pCos: 1 };
@@ -2014,6 +2060,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
       knock(v, dt);
       pose(v, dt);
       if (player.active) collideWithPlayer(v, v.yaw + v.yawOffset, v.bus ? 1.30 : v.isSUV ? 0.92 : 0.86, v.bus ? 5.72 : v.isSUV ? 2.22 : 2.18);
+      collideWithBuildings(v);
       if (v.vx * v.vx + v.vz * v.vz > 0.36) knockOn(v);
 
       if (v.bus) renderBus(v);
@@ -2100,6 +2147,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     group,
     update,
     setCollisionListener,
+    setCollisionQuery,
     cars,
     buses,
     peds,
