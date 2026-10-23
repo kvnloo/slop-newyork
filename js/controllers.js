@@ -869,6 +869,7 @@ class ThirdPersonControllerManager {
     for (let i = 0; i < near.length; i++) {
       const c = near[i];
       if (heli && entity?.type === 'helicopter' && Number.isFinite(c.maxY)
+        && (entity.verticalSpeed || 0) <= 0
         && pos.y >= c.maxY && pos.y - 0.7 < c.maxY) {
         // The rotor/body touches a rooftop from above: land on the roof
         // instead of being shunted sideways by a horizontal wall test.
