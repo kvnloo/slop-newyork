@@ -4,7 +4,7 @@ const { join } = require('node:path');
 const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
-const { footprintContact, buildingContact, impactResponse } = loadModule(
+const { footprintContact, buildingContact, circleBuildingContact, impactResponse } = loadModule(
   readFileSync(join(__dirname, '../js/collision-physics.js'), 'utf8')
 );
 
@@ -24,6 +24,15 @@ test('rotated building footprint does not collide in its empty axis-aligned corn
   const c = { minX: -8, maxX: 8, minZ: -8, maxZ: 8, obb };
   assert.equal(buildingContact(car(7, -7), c), null);
   const hit = buildingContact(car(3, 3), c);
+  assert.ok(hit && hit.depth > 0);
+});
+
+test('circular bicycle collider clears rotated corners without false positives', () => {
+  const cs = Math.SQRT1_2;
+  const box = { minX: -8, maxX: 8, minZ: -8, maxZ: 8,
+    obb: { cx: 0, cz: 0, hx: 8, hz: 2, cs, sn: cs } };
+  assert.equal(circleBuildingContact(4, 0, 0.65, box), null);
+  const hit = circleBuildingContact(3, 0, 0.65, box);
   assert.ok(hit && hit.depth > 0);
 });
 
