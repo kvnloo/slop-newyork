@@ -100,6 +100,7 @@ async function initApp() {
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Helicopter) & Multi-Camera System
   const controllerManager = new ThirdPersonControllerManager(scene, allColliders);
+  trafficSystem.setCollisionQuery((x, z, radius) => controllerManager.nearColliders(x, z, radius));
   // Reuse teleport placement so saved players return at rest, close to their last positions.
   try {
     const saved = JSON.parse(localStorage.getItem('nyc-player-state'));
