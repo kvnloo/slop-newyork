@@ -2350,6 +2350,13 @@ function buildRooseveltTram(group, parts, lm) {
     mesh.receiveShadow = true;
     group.add(mesh);
   }
+  // Keep physics proxies in the same world space as the instanced cabin meshes.
+  // The mesh is centred at rope height minus 3.5 m: vertical extent [-5,-2].
+  const movingColliders = TRACKS.map((_, i) => ({
+    type: 'tram', index: i, yaw: RY, halfWidth: 4, halfLength: 2,
+    x: 0, y: 0, z: 0, bottom: 0, top: 0,
+    vx: 0, vy: 0, vz: 0, lastElapsed: NaN
+  }));
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion().setFromAxisAngle(UP, RY);
   const one = new THREE.Vector3(1, 1, 1);
@@ -2359,6 +2366,20 @@ function buildRooseveltTram(group, parts, lm) {
     const u = p < 12 ? 0 : p < 67 ? ease((p - 12) / 55) : p < 79 ? 1 : 1 - ease((p - 79) / 55);
     [u, 1 - u].forEach((s, i) => {
       const [ru, ry] = ropeAt(s * L);
+      const wp = at(ru, TRACKS[i]);
+      const cabin = movingColliders[i];
+      const step = elapsed - cabin.lastElapsed;
+      // Initial render and large elapsed jumps are teleports, not impulses.
+      const smoothStep = step > 1e-6 && step < 0.1;
+      cabin.vx = smoothStep ? (wp.x - cabin.x) / step : 0;
+      cabin.vy = smoothStep ? ((ry - 3.5) - cabin.y) / step : 0;
+      cabin.vz = smoothStep ? (wp.z - cabin.z) / step : 0;
+      cabin.x = wp.x;
+      cabin.y = ry - 3.5;
+      cabin.z = wp.z;
+      cabin.bottom = ry - 5;
+      cabin.top = ry - 2;
+      cabin.lastElapsed = elapsed;
       m.compose(V(ru, ry, TRACKS[i]), q, one);
       cabins.setMatrixAt(i, m);
       gear.setMatrixAt(i, m);
@@ -2367,7 +2388,7 @@ function buildRooseveltTram(group, parts, lm) {
     gear.instanceMatrix.needsUpdate = true;
   };
   update(20);
-  return { colliders, update };
+  return { colliders, movingColliders, update };
 }
 
 // Lumpy deciduous crown (unit radius, centred at the origin): overlapping low-poly lobes whose normals point away from
@@ -3385,7 +3406,7 @@ function buildBoroughs(scene, { sidewalks = [] } = {}) {
 
   scene.add(group);
   console.info(`[boroughs] ${list.length} buildings ${JSON.stringify(stats)} built in ${(performance.now() - t0).toFixed(0)} ms`);
-  return { group, ridgeHeightAt, landAt, colliders: bridgeSite.colliders.concat(tram.colliders), update: tram.update };
+  return { group, ridgeHeightAt, landAt, colliders: bridgeSite.colliders.concat(tram.colliders), movingColliders: tram.movingColliders, update: tram.update };
 }
 
 export { buildBoroughs, ridgeHeightAt, landAt as boroughLandAt };

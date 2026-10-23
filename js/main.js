@@ -10,6 +10,7 @@ import { buildLandmarks } from './landmarks.js';
 import { buildCityBlocks } from './buildings.js';
 import { buildStreetDetails } from './street-details.js';
 import { createTrafficSystem, createHighwayTraffic } from './traffic.js';
+import { resolveTransportContact } from './transport-collisions.js';
 import { buildRoadPaint } from './road-paint.js';
 import { ThirdPersonControllerManager } from './controllers.js';
 import { TouchControls } from './touch-controls.js';
@@ -100,6 +101,16 @@ async function initApp() {
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Helicopter) & Multi-Camera System
   const controllerManager = new ThirdPersonControllerManager(scene, allColliders);
+  trafficSystem.setCollisionQuery((x, z, radius) => controllerManager.nearColliders(x, z, radius));
+  // Stable crash callback and collider references: avoid allocating callbacks
+  // when checking two tram cabins and the inactive vehicles every frame.
+  const inactiveTransport = Object.values(controllerManager.entities).filter((entity) => entity.type !== 'person');
+  let activeTransport = null;
+  let collisionTarget = null;
+  const reportTransportImpact = (hit) => controllerManager.reportCollision(
+    activeTransport, collisionTarget, collisionTarget.type === 'tram' ? 'tram' : 'vehicle',
+    hit.x, hit.y, hit.z, hit.nx, hit.ny, hit.nz, hit.speed
+  );
   // Reuse teleport placement so saved players return at rest, close to their last positions.
   try {
     const saved = JSON.parse(localStorage.getItem('nyc-player-state'));
@@ -654,6 +665,19 @@ async function initApp() {
     // Update 3rd-person controllers, camera, signals, traffic & vehicle collisions, building LODs, and dynamic shadow focus
     gamepadControls.update(dt);
     controllerManager.update(dt, elapsed);
+    if (boroughs.update) boroughs.update(elapsed); // update both cabin matrices and moving collision bodies
+    activeTransport = controllerManager.getActiveEntity();
+    if (controllerManager.activeMode !== 'person') {
+      for (const candidate of inactiveTransport) {
+        if (candidate === activeTransport) continue;
+        collisionTarget = candidate;
+        resolveTransportContact(activeTransport, candidate, reportTransportImpact);
+      }
+      for (const tram of boroughs.movingColliders || []) {
+        collisionTarget = tram;
+        resolveTransportContact(activeTransport, tram, reportTransportImpact);
+      }
+    }
     cameraSystem.update(dt, elapsed);
     streetDetails.signalClock.value = elapsed;
     trafficSystem.update(
@@ -669,7 +693,6 @@ async function initApp() {
       savePlayerState();
       nextPlayerSave = now + 5000;
     }
-    if (boroughs.update) boroughs.update(elapsed); // Roosevelt Island Tramway cabins
     cityBlocks.update(cameraSystem.currentPos.x, cameraSystem.currentPos.z);
     if (cityBlocks.updateLights) cityBlocks.updateLights(cameraSystem.camera);
     if (streetDetails.update) streetDetails.update(cameraSystem.camera);

@@ -20,6 +20,7 @@ import {
   createLoftedBusMaterial
 } from './actor-models.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
+import { footprintContact, buildingContact, impactResponse } from './collision-physics.js';
 
 // js/traffic.js
 // Manhattan traffic and pedestrians on the road graph road-network.js derives from the city as built:
@@ -78,18 +79,25 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
   const group = new THREE.Group();
   group.name = 'ManhattanTrafficAndPedestrians';
   let collisionListener = null;
+  let collisionQuery = null;
   const collisionEvent = { a: null, b: null, kind: 'vehicle', x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, speed: 0 };
 
   function setCollisionListener(listener) {
     collisionListener = typeof listener === 'function' ? listener : null;
   }
 
+  // Share the controller's spatial hash instead of rebuilding the city's building index.
+  function setCollisionQuery(query) {
+    collisionQuery = typeof query === 'function' ? query : null;
+  }
+
   // Synchronous notification: listeners must copy any fields they retain. Normal points from b toward a.
-  function reportCollision(a, b, x, y, z, nx, nz, speed) {
+  function reportCollision(a, b, x, y, z, nx, nz, speed, kind = 'vehicle') {
     if (!collisionListener || speed <= 0.5) return;
     collisionEvent.a = a; collisionEvent.b = b;
     collisionEvent.x = x; collisionEvent.y = y; collisionEvent.z = z;
     collisionEvent.nx = nx; collisionEvent.nz = nz; collisionEvent.speed = speed;
+    collisionEvent.kind = kind;
     collisionListener(collisionEvent);
   }
 
@@ -1197,6 +1205,44 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     }
   }
 
+
+  // Road traffic stays lane-constrained, but a side impact can shove it into a
+  // facade. Test only knocked vehicles against the shared nearby-collider hash.
+  function collideWithBuildings(v) {
+    if (!collisionQuery || v.vx * v.vx + v.vz * v.vz < 0.04) return;
+    const reach = v.half + 3;
+    const nearby = collisionQuery(v.x, v.z, reach);
+    for (const c of nearby) {
+      if (c.maxY < 0 || v.x < c.minX - reach || v.x > c.maxX + reach
+        || v.z < c.minZ - reach || v.z > c.maxZ + reach) continue;
+      const hit = buildingContact({
+        x: v.x, z: v.z, yaw: v.yaw + v.yawOffset,
+        halfWidth: v.halfWidth, halfLength: v.half
+      }, c);
+      if (!hit) continue;
+      const { nx, nz, depth } = hit;
+      shove(v, nx * (depth + 0.02), nz * (depth + 0.02));
+
+      const avx = v.tx * v.speed + v.vx, avz = v.tz * v.speed + v.vz;
+      const response = impactResponse(avx, avz, 0, 0, nx, nz, 1, 0, 0.12);
+      if (!response.approachSpeed) continue;
+      // Split the resulting velocity into road-progress and off-axis recoil.
+      // Lane speed cannot go negative; the recoil decays in knock().
+      v.speed = Math.min(v.speed, Math.max(0, response.aVx * v.tx + response.aVz * v.tz));
+      v.vx = response.aVx - v.tx * v.speed;
+      v.vz = response.aVz - v.tz * v.speed;
+      const side = nz * v.tx - nx * v.tz;
+      v.yawVel += side * Math.min(2.8, response.approachSpeed * 0.20);
+      v.rollVel += side * Math.min(8, response.approachSpeed) * 0.16;
+      reportCollision(v, c, v.x - nx * v.halfWidth, 0.65,
+        v.z - nz * v.halfWidth, nx, nz, response.approachSpeed, 'building');
+      if (response.approachSpeed > 2.2) {
+        spawnCollisionSparks(v.x - nx * v.halfWidth, 0.65,
+          v.z - nz * v.halfWidth, nx, nz, response.approachSpeed);
+      }
+    }
+  }
+
   // Physical 4-axis 2D SAT OBB test between a vehicle (half extents halfW x halfL, heading rotY) and the player.
   // Returns the minimum translation axis (pointing from the vehicle towards the player), or null if they don't overlap.
   const satHit = { nx: 0, nz: 0, pen: 0, localX: 0, localZ: 0, pSin: 0, pCos: 1 };
@@ -2014,6 +2060,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
       knock(v, dt);
       pose(v, dt);
       if (player.active) collideWithPlayer(v, v.yaw + v.yawOffset, v.bus ? 1.30 : v.isSUV ? 0.92 : 0.86, v.bus ? 5.72 : v.isSUV ? 2.22 : 2.18);
+      collideWithBuildings(v);
       if (v.vx * v.vx + v.vz * v.vz > 0.36) knockOn(v);
 
       if (v.bus) renderBus(v);
@@ -2100,6 +2147,7 @@ function createTrafficSystem(scene, sidewalks, obstacles) {
     group,
     update,
     setCollisionListener,
+    setCollisionQuery,
     cars,
     buses,
     peds,
@@ -2129,6 +2177,89 @@ function createHighwayTraffic(scene, lanes) {
   const group = new THREE.Group();
   group.name = 'HighwayTraffic';
   scene.add(group);
+
+  let collisionListener = null;
+  const collisionEvent = {
+    a: null, b: null, kind: 'vehicle', x: 0, y: 0, z: 0,
+    nx: 0, ny: 0, nz: 0, speed: 0
+  };
+  function setCollisionListener(listener) {
+    collisionListener = typeof listener === 'function' ? listener : null;
+  }
+
+  // Highways use scalar progress along fixed elevated lanes rather than free
+  // rigid bodies. Transfer mass-weighted normal momentum, brake the lane car,
+  // and separate the player so the two visual bodies cannot pass through.
+  function collideWithHighwayCar(c, entity, mode) {
+    if (!entity || !entity.position || Math.abs(c.x - entity.position.x) > 9
+      || Math.abs(c.z - entity.position.z) > 9) return;
+    const p = entity.position;
+    const bottom = p.y - (mode === 'helicopter' ? 0.7 : 0);
+    const top = p.y + (mode === 'helicopter' ? 3.2 : 1.9);
+    if (bottom >= c.y + 1.9 || top <= c.y + 0.35) return;
+
+    const pYaw = entity.heading || 0;
+    const pWidth = mode === 'helicopter' ? 4.5 : mode === 'car' ? 0.86
+      : mode === 'cyclist' ? 0.35 : 0.32;
+    const pLength = mode === 'helicopter' ? 4.5 : mode === 'car' ? 2.18
+      : mode === 'cyclist' ? 0.85 : 0.32;
+    const hit = footprintContact(
+      { x: p.x, z: p.z, yaw: pYaw, halfWidth: pWidth, halfLength: pLength },
+      { x: c.x, z: c.z, yaw: c.yaw, halfWidth: c.kind === 'suv' ? 0.92 : 0.86,
+        halfLength: c.kind === 'suv' ? 2.22 : 2.18 }
+    );
+    if (!hit) return;
+    const { nx, nz, depth } = hit;
+    p.x += nx * (depth + 0.02);
+    p.z += nz * (depth + 0.02);
+    entity.mesh?.position.copy(p);
+
+    const ps = Math.sin(pYaw), pc = Math.cos(pYaw);
+    const cs = Math.sin(c.yaw), cc = Math.cos(c.yaw);
+    const pvx = ps * (entity.speed || 0) + (entity.vx || 0);
+    const pvz = pc * (entity.speed || 0) + (entity.vz || 0);
+    const mass = mode === 'helicopter' ? 2400 : mode === 'car' ? 1450
+      : mode === 'cyclist' ? 100 : 80;
+    const response = impactResponse(pvx, pvz, cs * c.v, cc * c.v,
+      nx, nz, 1 / mass, 1 / (c.kind === 'suv' ? 1900 : 1450), 0.18);
+    if (!response.approachSpeed) return;
+
+    const speedLimit = mode === 'helicopter' ? 52 : mode === 'car' ? 36
+      : mode === 'cyclist' ? 19 : 8.2;
+    entity.speed = Math.max(-speedLimit, Math.min(speedLimit,
+      response.aVx * ps + response.aVz * pc));
+    if (mode === 'car') {
+      // Only the car integrates lateral skid velocity and chassis springs.
+      entity.vx = response.aVx - ps * entity.speed;
+      entity.vz = response.aVz - pc * entity.speed;
+      const lateral = nx * pc - nz * ps;
+      entity.angularVel += lateral * Math.min(2.6, response.approachSpeed * 0.12);
+      entity.rollVel -= lateral * Math.min(12, response.approachSpeed) * 0.19;
+      entity.pitchVel += (nx * ps + nz * pc) * Math.min(12, response.approachSpeed) * 0.14;
+      entity.heaveVel += Math.min(1.4, response.approachSpeed * 0.09);
+    } else if (mode === 'cyclist') {
+      entity.leanAngle = Math.max(-0.6, Math.min(0.6,
+        entity.leanAngle + (nx * pc - nz * ps) * Math.min(0.4, response.approachSpeed * 0.04)));
+    } else if (mode === 'helicopter') {
+      entity.rollAngle = Math.max(-0.45, Math.min(0.45,
+        entity.rollAngle + (nx * pc - nz * ps) * Math.min(0.28, response.approachSpeed * 0.02)));
+    }
+    c.v = Math.max(0, Math.min(c.lane.speed * 1.25, response.bVx * cs + response.bVz * cc));
+
+    const contactX = (p.x + c.x) * 0.5, contactZ = (p.z + c.z) * 0.5;
+    if (collisionListener) {
+      collisionEvent.a = entity; collisionEvent.b = c;
+      collisionEvent.x = contactX; collisionEvent.y = c.y + 0.65; collisionEvent.z = contactZ;
+      collisionEvent.nx = nx; collisionEvent.nz = nz;
+      collisionEvent.speed = response.approachSpeed;
+      collisionListener(collisionEvent);
+    }
+    if (mode !== 'person' && response.approachSpeed > 2.2) {
+      entity.lastCollisionSpark = { x: contactX, y: c.y + 0.65,
+        z: contactZ, nx, nz, speed: response.approachSpeed };
+    }
+  }
+
   const KINDS = ['taxi', 'sedan', 'suv'];
   const PALETTES = {
     taxi: [0xffbe14],
@@ -2354,6 +2485,7 @@ function createHighwayTraffic(scene, lanes) {
       c.z = z;
       c.yaw = yaw;
       c.placed = true;
+      collideWithHighwayCar(c, entity, mode);
       const dx = x - cam.x;
       const dz = z - cam.z;
       const dy = y - cam.y;
@@ -2478,7 +2610,7 @@ function createHighwayTraffic(scene, lanes) {
     }
   }
 
-  return { group, update, cars, lanes };
+  return { group, update, cars, lanes, setCollisionListener };
 }
 
 export { createTrafficSystem, createHighwayTraffic };
