@@ -113,7 +113,7 @@ test('highway car transfers momentum to player and plays crash event', () => {
     footprintContact: physics.footprintContact,
     impactResponse: physics.impactResponse,
     collisionListener: event => hits.push({ ...event }),
-    collisionEvent: {}
+    collisionEvent: { kind: 'vehicle' }
   });
   const car = { x: 0, z: 0, y: 7.6, yaw: 0, v: 18, kind: 'sedan', lane: { speed: 24 } };
   const player = {
@@ -127,7 +127,7 @@ test('highway car transfers momentum to player and plays crash event', () => {
   assert.ok(player.speed > 0, 'player picks up forward momentum');
   assert.ok(car.v < 18, 'highway car loses momentum');
   assert.equal(hits.length, 1);
-  assert.equal(hits[0].kind, undefined); // Reused real event is initialized by the system.
+  assert.equal(hits[0].kind, 'vehicle');
   assert.ok(hits[0].speed > 2.2);
 });
 
