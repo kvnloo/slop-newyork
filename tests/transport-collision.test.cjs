@@ -21,7 +21,7 @@ function control(mode, collider) {
       'three/webgpu': {},
       './city-config.js': { ISLAND_BOUNDS: {
         minX: -500, maxX: 500, minZ: -500, maxZ: 500
-      }, getIslandBoundsAtZ: null },
+      }, getIslandBoundsAtZ: null, streetZ: () => 0 },
       './tsl-materials.js': {},
       './actor-models.js': {},
       './pedestrians.js': {},
