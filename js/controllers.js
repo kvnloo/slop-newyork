@@ -21,7 +21,7 @@ import {
 } from './actor-models.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
-import { buildingContact } from './collision-physics.js';
+import { buildingContact, circleBuildingContact } from './collision-physics.js';
 import { bryantParkLawn } from './landmarks.js';
 
 // js/controllers.js
@@ -873,11 +873,10 @@ class ThirdPersonControllerManager {
         pos.z - extZ < c.maxZ
       ) {
         // Exact oriented SAT contact (not the empty corners of a rotated facade).
-        const hit = buildingContact({
-          x: pos.x, z: pos.z, yaw: carEntity ? carEntity.heading : 0,
-          halfWidth: carEntity ? 0.86 : radius,
-          halfLength: carEntity ? 2.18 : radius
-        }, c);
+        const hit = carEntity ? buildingContact({
+          x: pos.x, z: pos.z, yaw: carEntity.heading,
+          halfWidth: 0.86, halfLength: 2.18
+        }, c) : circleBuildingContact(pos.x, pos.z, radius, c);
         if (!hit) continue;
         const { nx, nz } = hit;
         pos.x += nx * (hit.depth + 0.001);
