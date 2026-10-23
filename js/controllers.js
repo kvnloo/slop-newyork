@@ -21,6 +21,7 @@ import {
 } from './actor-models.js';
 import { PersonCrowd, PersonRig } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
+import { buildingContact } from './collision-physics.js';
 import { bryantParkLawn } from './landmarks.js';
 
 // js/controllers.js
@@ -871,58 +872,16 @@ class ThirdPersonControllerManager {
         pos.z + extZ > c.minZ &&
         pos.z - extZ < c.maxZ
       ) {
-        let nx = 0;
-        let nz = 0;
-        if (c.obb) {
-          // Oriented box (buildings along a non-grid street; min/max are its world bounds): push out in its own frame
-          const o = c.obb;
-          const dx = pos.x - o.cx;
-          const dz = pos.z - o.cz;
-          const lx = dx * o.cs - dz * o.sn;
-          const lz = dx * o.sn + dz * o.cs;
-          const ls = sinH * o.cs - cosH * o.sn; // heading in the box's frame
-          const lc = sinH * o.sn + cosH * o.cs;
-          const ex = carEntity ? (Math.abs(lc) * 0.86 + Math.abs(ls) * 2.18) : radius;
-          const ez = carEntity ? (Math.abs(ls) * 0.86 + Math.abs(lc) * 2.18) : radius;
-          if (lx + ex <= -o.hx || lx - ex >= o.hx || lz + ez <= -o.hz || lz - ez >= o.hz) continue;
-          const oL = lx + ex + o.hx;
-          const oR = o.hx - (lx - ex);
-          const oT = lz + ez + o.hz;
-          const oB = o.hz - (lz - ez);
-          const m = Math.min(oL, oR, oT, oB);
-          let qx = lx;
-          let qz = lz;
-          let mx = 0;
-          let mz = 0;
-          if (m === oL) { qx = -o.hx - ex; mx = -1; }
-          else if (m === oR) { qx = o.hx + ex; mx = 1; }
-          else if (m === oT) { qz = -o.hz - ez; mz = -1; }
-          else { qz = o.hz + ez; mz = 1; }
-          pos.x = o.cx + qx * o.cs + qz * o.sn;
-          pos.z = o.cz - qx * o.sn + qz * o.cs;
-          nx = mx * o.cs + mz * o.sn;
-          nz = -mx * o.sn + mz * o.cs;
-        } else {
-          const overlapLeft = (pos.x + extX) - c.minX;
-          const overlapRight = c.maxX - (pos.x - extX);
-          const overlapTop = (pos.z + extZ) - c.minZ;
-          const overlapBottom = c.maxZ - (pos.z - extZ);
-
-          const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
-          if (minOverlap === overlapLeft) {
-            pos.x = c.minX - extX;
-            nx = -1;
-          } else if (minOverlap === overlapRight) {
-            pos.x = c.maxX + extX;
-            nx = 1;
-          } else if (minOverlap === overlapTop) {
-            pos.z = c.minZ - extZ;
-            nz = -1;
-          } else {
-            pos.z = c.maxZ + extZ;
-            nz = 1;
-          }
-        }
+        // Exact oriented SAT contact (not the empty corners of a rotated facade).
+        const hit = buildingContact({
+          x: pos.x, z: pos.z, yaw: carEntity ? carEntity.heading : 0,
+          halfWidth: carEntity ? 0.86 : radius,
+          halfLength: carEntity ? 2.18 : radius
+        }, c);
+        if (!hit) continue;
+        const { nx, nz } = hit;
+        pos.x += nx * (hit.depth + 0.001);
+        pos.z += nz * (hit.depth + 0.001);
 
         if (this._collisionListener && entity && entity.type !== 'person') {
           const sin = carEntity ? sinH : Math.sin(entity.heading);
@@ -959,6 +918,31 @@ class ThirdPersonControllerManager {
                 nx,
                 nz,
                 speed: vn
+              };
+            }
+          }
+        } else if (entity && entity.type !== 'person') {
+          // Cyclists and helicopters also lose normal velocity on an impact;
+          // previously they kept powering against the same facade each frame.
+          const sin = Math.sin(entity.heading), cos = Math.cos(entity.heading);
+          const closing = -(sin * entity.speed * nx + cos * entity.speed * nz);
+          if (closing > 0.5) {
+            const front = sin * nx + cos * nz;
+            entity.speed *= Math.abs(front) > 0.4 ? -0.12 : 0.45;
+            if (entity.type === 'helicopter') {
+              entity.verticalSpeed *= 0.65;
+              entity.pitchAngle = Math.max(-0.45, Math.min(0.45,
+                entity.pitchAngle + front * Math.min(0.22, closing * 0.02)));
+              entity.rollAngle = Math.max(-0.45, Math.min(0.45,
+                entity.rollAngle + (cos * nx - sin * nz) * Math.min(0.3, closing * 0.025)));
+            } else if (entity.type === 'cyclist') {
+              entity.leanAngle = Math.max(-0.6, Math.min(0.6,
+                entity.leanAngle + (cos * nx - sin * nz) * Math.min(0.4, closing * 0.05)));
+            }
+            if (closing > 2.2) {
+              entity.lastCollisionSpark = {
+                x: pos.x - nx * radius, y: pos.y + (heli ? 1.1 : 0.56),
+                z: pos.z - nz * radius, nx, nz, speed: closing
               };
             }
           }
