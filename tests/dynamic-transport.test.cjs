@@ -37,7 +37,7 @@ test('helicopter collides with moving tram at cable height, emitting one impact'
   assert.equal(resolveTransportContact(heli, tram(), hit => impacts.push(hit)), true);
   assert.ok(heli.position.z > 6.49, 'helicopter rotor clears the cabin front');
   assert.ok(heli.speed > -18, 'relative normal speed is reduced');
-  assert.ok(heli.vz > 0, 'collision preserves sideways recoil');
+  assert.ok(heli.speed > 0, 'head-on impact produces a modest rebound');
   assert.equal(impacts.length, 1);
   assert.ok(impacts[0].speed >= 17);
   assert.equal(impacts[0].ny, 0);
