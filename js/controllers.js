@@ -288,8 +288,12 @@ class ThirdPersonControllerManager {
       for (const wheel of ent.wheels) if (wheel.isFront) wheel.steerPivot.rotation.y = 0;
       if (ent.carState) ent.carState.value.x = 1;
     } else if (this.activeMode === 'cyclist') {
+      ent.vx = ent.vz = 0;
+      ent.lastCollisionSpark = null;
       ent.leanAngle = ent.leanPivot.rotation.z = 0;
     } else if (heli) {
+      ent.vx = ent.vz = 0;
+      ent.lastCollisionSpark = null;
       ent.verticalSpeed = ent.pitchAngle = ent.rollAngle = 0;
       ent.tiltPivot.rotation.x = ent.tiltPivot.rotation.z = 0;
       ent.tiltPivot.position.y = 0;
@@ -1150,8 +1154,10 @@ class ThirdPersonControllerManager {
       b.heading += turnInput * 2.15 * dirSign * dt;
     }
 
-    b.position.x += Math.sin(b.heading) * b.speed * dt;
-    b.position.z += Math.cos(b.heading) * b.speed * dt;
+    b.position.x += (Math.sin(b.heading) * b.speed + (b.vx || 0)) * dt;
+    b.position.z += (Math.cos(b.heading) * b.speed + (b.vz || 0)) * dt;
+    b.vx = (b.vx || 0) * Math.exp(-6 * dt);
+    b.vz = (b.vz || 0) * Math.exp(-6 * dt);
     this.resolveHorizontalCollision(b.position, 0.65, 1.0, null, b);
     b.position.y = this.getGroundHeight(b.position.x, b.position.z, 'cyclist');
 
@@ -1203,8 +1209,10 @@ class ThirdPersonControllerManager {
 
     h.heading += yawInput * 1.45 * dt;
 
-    h.position.x += Math.sin(h.heading) * h.speed * dt;
-    h.position.z += Math.cos(h.heading) * h.speed * dt;
+    h.position.x += (Math.sin(h.heading) * h.speed + (h.vx || 0)) * dt;
+    h.position.z += (Math.cos(h.heading) * h.speed + (h.vz || 0)) * dt;
+    h.vx = (h.vx || 0) * Math.exp(-4 * dt);
+    h.vz = (h.vz || 0) * Math.exp(-4 * dt);
     h.position.y += h.verticalSpeed * dt;
 
     if (h.position.y < 0.25) {
